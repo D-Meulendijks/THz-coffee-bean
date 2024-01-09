@@ -5,12 +5,20 @@ from datetime import datetime
 from functools import partial
 import logging
 
-from TFCCoffeebean import TFCCoffeeBean, configure_logger
+from settings import get_settings
+from logger_settings import configure_logger, create_folder_if_not_exists
+from TFCCoffeebean import TFCCoffeeBean
+from Devices.TeraFlashClient.Pulse import TFPulse
+from guiqwt.curve import CurvePlot
+from guiqwt.builder import make
+from qwt import QwtPlot
 
 # Worker class handling device operations in a separate thread
 class TFCCofffeebeanWorker(QObject):
     connected_stagemover = pyqtSignal(bool)
     connected_teraflash = pyqtSignal(bool)
+    trace = pyqtSignal(TFPulse)
+    updated_position = pyqtSignal(list)
     message_sent = pyqtSignal(str)
 
     def __init__(self, tfccoffeebean:TFCCoffeeBean):
@@ -20,8 +28,32 @@ class TFCCofffeebeanWorker(QObject):
     def update_settings(self, settings:dict):
         self.tfccoffeebean.settings = settings
 
+    @pyqtSlot()
     def move_stagemovers_relative(self, relative_pos):
-        self.tfccoffeebean.stagemover.move_all(relative_pos, mode='relative')
+        try:
+            position = self.tfccoffeebean.stagemover.move_all(relative_pos, mode='relative')
+            self.updated_position.emit(position)
+        except Exception as e:
+            logging.warning(f"Error moving stage: {e}")
+
+    @pyqtSlot()
+    def measure_trace(self):
+        try:
+            pulse = self.tfccoffeebean.save_pulse(return_pulse=True)
+        except Exception as e:
+            logging.warning(f"Error making THz measurement: e")
+        try:
+            self.trace.emit(pulse)
+        except Exception as e:
+            logging.warning(f"Error making THz measurement: {e}")
+
+    @pyqtSlot()
+    def home(self):
+        try:
+            self.tfccoffeebean.stagemover.home()
+            self.updated_position.emit([0, 0, 0])
+        except Exception as e:
+            logging.warning(f"Error homing: {e}")
 
     @pyqtSlot()
     def connect_stagemover(self):
@@ -39,43 +71,7 @@ class TFCCofffeebeanWorker(QObject):
         self.message_sent.emit(response)
 
 # Your settings dictionary
-settings = {
-    "teraflash":    {
-        "toptica_IP": "192.168.1.10",
-        "TFC_BEGIN": 1070,
-        "TFC_AVERAGING": 10,
-        "TRANSFER": "block",
-        "TFC_RANGE": 100.,
-        "RESOLUTION": 0.001,
-    },
-    "stagemover":    {
-        "port": "COM12",
-        "device_names": ["x", "y", "z"],
-        "max_lenghts": [140, 140, 45],
-        "permutation": [2, 0, 1],
-    },
-    "stagegridmover": {
-        "x_min": None,
-        "x_max": None,
-        "x_n": 15,
-        "y_min": None,
-        "y_max": None,
-        "y_n": 15,
-        "z_min": 25,
-        "z_max": 25,
-        "z_n": 1,
-        },
-        "calibration": {
-        "rough_step_size": 1, #mm
-        "margin": 0.6, 
-        "max_deviation_from_center": 30 #mm
-    },
-    "general": {
-        "measurement_savefolder": f"./measurements/{datetime.now().strftime('%Y-%m-%d')}",
-        "measurement_name": f"{datetime.now().strftime('%H-%M-%S')}.txt",
-        "measurement_name_screen": f"{datetime.now().strftime('%H-%M-%S')}_screening.txt",
-    }
-}
+settings = get_settings()
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -84,6 +80,7 @@ class MainWindow(QWidget):
         self.TFC = TFCCoffeeBean(self.settings)
         self.TFCCofffeebeanWorker = TFCCofffeebeanWorker(self.TFC)
         self.calibration_values = QLabel("Calibration Values: Not Yet Calibrated")
+        self.step_size = 1
         self.init_ui()
 
     def init_ui(self):
@@ -99,6 +96,7 @@ class MainWindow(QWidget):
 
         settings_group_box = self.create_settings_group_box()
         manual_mover_box = self.create_manual_mover()
+        manual_measurer_box = self.create_manual_measurer()
 
         main_layout = QHBoxLayout()
         button_layout = QVBoxLayout()
@@ -116,9 +114,11 @@ class MainWindow(QWidget):
             pass
             #main_layout.addWidget(box)
         main_layout.addWidget(manual_mover_box)
+        main_layout.addWidget(manual_measurer_box)
 
         self.setLayout(main_layout)
         self.show()
+
 
 
     def create_teraflash_connection_layout(self):
@@ -181,32 +181,94 @@ class MainWindow(QWidget):
         return settings_group_box
 
 
+    def set_position_label(self, position):
+        try:
+            self.pos_label.setText(f"x: {position[0]:.2f}, y: {position[1]:.2f}, z: {position[2]:.2f}")
+        except Exception as e:
+            logging.warning(f"Cannot set position label: {e}")
+
+    def move_stages(self, direction):
+        relative_position = [self.step_size*v for v in direction]
+        self.TFCCofffeebeanWorker.move_stagemovers_relative(relative_position)
+
+
+    def set_step_size(self, size):
+        self.step_size = float(size)
+        logging.info(f"Step size set to: {size}")
+
+    def update_plot(self, updated_trace):
+        self.curve_time.set_data(updated_trace.t(), updated_trace.E())
+        self.plot.do_autoscale(replot=True)
+
+    def create_manual_measurer(self):
+        measure_button = QPushButton("Save Trace")
+        measure_button.clicked.connect(self.TFCCofffeebeanWorker.measure_trace)
+
+        self.TFCCofffeebeanWorker.trace.connect(lambda trace: self.update_plot(trace))
+
+        self.plot = CurvePlot()
+        self.curve_time = make.curve([], [], color='b', title='pulse')
+        self.plot.add_item(self.curve_time)
+        self.plot.setAxisTitle(QwtPlot.yLeft, 'Electric field (a.u.)')
+        self.plot.setAxisTitle(QwtPlot.xBottom, 'time (ps)')
+
+        layout = QGridLayout()
+        layout.addWidget(measure_button, 0, 0)
+        layout.addWidget(self.plot, 1, 0)
+        widget = QGroupBox(f"Manual mover")
+        widget.setLayout(layout)
+        return widget
+
     def create_manual_mover(self):
         central_button = QPushButton("Center")
-        up_button = QPushButton("Up")
-        up_button.clicked.connect(partial(self.TFCCofffeebeanWorker.move_stagemovers_relative, [0, 1, 0]))
-        up_button_2 = QPushButton("Up")
-        down_button = QPushButton("Down")
-        down_button.clicked.connect(partial(self.TFCCofffeebeanWorker.move_stagemovers_relative, [0, -1, 0]))
-        down_button_2 = QPushButton("Down")
-        left_button = QPushButton("Left")
-        left_button.clicked.connect(partial(self.TFCCofffeebeanWorker.move_stagemovers_relative, [-1, 0, 0]))
-        left_button_2 = QPushButton("Left")
-        right_button = QPushButton("Right")
-        right_button.clicked.connect(partial(self.TFCCofffeebeanWorker.move_stagemovers_relative, [1, 0, 0]))
-        right_button_2 = QPushButton("Right")
+        central_button.clicked.connect(self.TFCCofffeebeanWorker.home)
+        ypos_button = QPushButton("Y+")
+        ypos_button.clicked.connect(partial(self.move_stages, [0, -1, 0]))
+        ypos_button_2 = QPushButton("Y++")
+        yneg_button = QPushButton("Y-")
+        yneg_button.clicked.connect(partial(self.move_stages, [0, 1, 0]))
+        yneg_button_2 = QPushButton("Y--")
 
-        layout = layout = QGridLayout()
+        xneg_button = QPushButton("X-")
+        xneg_button.clicked.connect(partial(self.move_stages, [-1, 0, 0]))
+        xneg_button_2 = QPushButton("X--")
+        xpos_button = QPushButton("X+")
+        xpos_button.clicked.connect(partial(self.move_stages, [1, 0, 0]))
+        xpos_button_2 = QPushButton("X++")
+
+        zneg_button = QPushButton("Z-")
+        zneg_button.clicked.connect(partial(self.TFCCofffeebeanWorker.move_stagemovers_relative, [0, 0, -1]))
+        zneg_button_2 = QPushButton("Z--")
+        zpos_button = QPushButton("Z+")
+        zpos_button.clicked.connect(partial(self.TFCCofffeebeanWorker.move_stagemovers_relative, [0, 0, 1]))
+        zpos_button_2 = QPushButton("Z++")
+
+        self.pos_label = QLabel("x: 0.0, y: 0.0, z: 0.0")
+        self.TFCCofffeebeanWorker.updated_position.connect(self.set_position_label)
+        step_size_label = QLabel("set_step_size")
+        step_size_edit = QLineEdit(str(self.step_size))
+        step_size_edit.textChanged.connect(self.set_step_size)
+
+
+        layout = QGridLayout()
         layout.addWidget(central_button, 2, 2)
-        layout.addWidget(up_button, 1, 2)
-        layout.addWidget(down_button, 3, 2)
-        layout.addWidget(left_button, 2, 1)
-        layout.addWidget(right_button, 2, 3)
-        layout.addWidget(up_button_2, 0, 2)
-        layout.addWidget(down_button_2, 4, 2)
-        layout.addWidget(left_button_2, 2, 0)
-        layout.addWidget(right_button_2, 2, 4)
+        layout.addWidget(ypos_button, 1, 2)
+        layout.addWidget(yneg_button, 3, 2)
+        layout.addWidget(xneg_button, 2, 1)
+        layout.addWidget(xpos_button, 2, 3)
+        layout.addWidget(ypos_button_2, 0, 2)
+        layout.addWidget(yneg_button_2, 4, 2)
+        layout.addWidget(xneg_button_2, 2, 0)
+        layout.addWidget(xpos_button_2, 2, 4)
 
+        layout.addWidget(zpos_button_2, 0, 5)
+        layout.addWidget(zpos_button, 1, 5)
+        layout.addWidget(zneg_button, 2, 5)
+        layout.addWidget(zneg_button_2, 3, 5)
+        layout.addWidget(self.pos_label, 4, 5)
+
+        layout.addWidget(step_size_label, 4, 3)
+        layout.addWidget(step_size_edit, 4, 4)
         widget = QGroupBox(f"Manual mover")
         widget.setLayout(layout)
         return widget
@@ -218,7 +280,6 @@ class MainWindow(QWidget):
         logging.info(f"Connecting to teraflash at {settings['teraflash']['toptica_IP']}...")
         self.TFCCofffeebeanWorker.connected_teraflash.connect(lambda status: self.update_teraflash_status(status))
         self.TFCCofffeebeanWorker.connect_teraflash()
-        
 
     def update_teraflash_status(self, status):
         self.connected_teraflash = status
@@ -229,14 +290,12 @@ class MainWindow(QWidget):
         else:
             self.connection_status_teraflash.setText(f"Teraflash: Not connected")
             self.connection_status_teraflash.setStyleSheet("color: red")
-
         
     def connect_stagemover(self):
         self.connection_status_stagemover.setText("Stages: Connecting...")
         self.connection_status_stagemover.setStyleSheet("color: gray")
         QApplication.processEvents()
         logging.info(f"Connecting to linear stages at {self.settings['stagemover']['port']}...")
-        self.connected_stagemover = self.TFC.connect_stagemover()
         self.TFCCofffeebeanWorker.connected_stagemover.connect(lambda status: self.update_stagemover_status(status))
         self.TFCCofffeebeanWorker.connect_stagemover()
 

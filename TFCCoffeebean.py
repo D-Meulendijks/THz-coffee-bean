@@ -5,44 +5,41 @@ import os
 from fakeenvironment import FakeTFC
 import numpy as np
 import matplotlib.pyplot as plt
+from settings import get_settings
+from logger_settings import configure_logger, create_folder_if_not_exists
+
+# Dependencies for Teraflash
+import sys
+sys.path.append("C:\\terasoft\\")
+from Devices.Data.ReadWriteData import Data
+from Devices.TeraFlashClient import TeraFlashClient, State
+import threading
 
 PLOT_MAXIMUM_ENERGY = 100
 PLOT_MINIMUM_ENERGY = 0
 
 
-def create_folder_if_not_exists(folder_path):
-    # Check if the folder exists
-    if not os.path.exists(folder_path):
-        try:
-            # Create the folder if it doesn't exist
-            os.makedirs(folder_path)
-            logging.info(f"Folder '{folder_path}' created successfully.")
-        except OSError as e:
-            logging.critical(f"Failed to create folder '{folder_path}': {e}")
-    else:
-        logging.debug(f"Folder '{folder_path}' already exists, no new one created.")
-
-class TFC:
+class TFC(TeraFlashClient):
     def __init__(self, teraflash_settings):
         super().__init__(teraflash_settings["toptica_IP"])
         self.teraflash_settings = teraflash_settings
 
-    def connect(self):
+    def connect_teraflash(self):
         logging.info(f"Connecting...")
         connection_result = self.connect()
         logging.info(f"Connected")
         return connection_result
 
     def start_laser(self):
-        self.set_averaging(self.settings.TFC_AVERAGING)
+        self.set_averaging(self.teraflash_settings["TFC_AVERAGING"])
         if self.teraflash_settings["TRANSFER"] == "block":
             self.set_block_transfer()
         else:
             self.set_sliding_transfer()
-        self.set_begin(self.teraflash_settings.TFC_BEGIN)
-        self.set_range(self.teraflash_settings.TFC_RANGE)
+        self.set_begin(self.teraflash_settings["TFC_BEGIN"])
+        self.set_range(self.teraflash_settings["TFC_RANGE"])
         self.start(wait=True)
-        print("Connected and started the laser")
+        logging.info("Connected and started the laser")
 
     def get_corrected_pulse(self):
         pulse = self.get_trace()
@@ -106,7 +103,7 @@ class MeasurementPlotter:
 class TFCCoffeeBean:
     def __init__(self, settings):
         self.settings = settings
-        self.teraflash = FakeTFC(self.settings["teraflash"])
+        self.teraflash = TFC(self.settings["teraflash"])
         self.stagemover = StageMover(self.settings["stagemover"])
         logging.debug(f"Settings: {self.settings}")
 
@@ -120,11 +117,37 @@ class TFCCoffeeBean:
         self.pulse_db = []
         self.temp_pulse_db = []
         self.plot_batch_counter = 0
+        self.current_trace = []
+
+    def save_pulse(self, return_pulse=False):
+        file_name = "C:\\Users\\20192137\\Documents\\THz-coffee-bean\\measurements\\pulses"
+        dat = Data(pulse=self.current_trace)
+        dat.save(file_name)
+        logging.info(f'pulse saved to: {dat.filename}')
+        if return_pulse:
+            return self.current_trace
+
+
+    def measurement_thread(self):
+        self.stopped = False
+        while not self.stopped:
+            if self.teraflash.running():
+                self.current_trace = self.teraflash.get_next_trace()
+
 
     def connect_teraflash(self):
-        connection = self.teraflash.connect()
-        self.teraflash.start_laser()
-        return connection
+        try:
+            connection_info = self.teraflash.connect_teraflash()
+            self.teraflash.start_laser()
+            logging.debug(f"Teraflash connection info: \n {connection_info}")
+            logging.debug(f"Starting measurement thread")
+            measure_thread = threading.Thread(target=self.measurement_thread)
+            measure_thread.daemon = True
+            measure_thread.start()
+            logging.debug(f"Thread started")
+            return True
+        except:
+            return False
         #self.stagemover.home()
 
     def connect_stagemover(self):
@@ -196,67 +219,13 @@ class TFCCoffeeBean:
             file.write(f"{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}_{pulse_path}_{position[0]},{position[1]},{position[2]}\n")
         return measurement
 
-def configure_logger():
-    filename_time = datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
-    file_handler = logging.FileHandler(f'./logs/debug_log_{filename_time}.log')
-    file_handler.setLevel(logging.DEBUG)  # Set the file handler level to capture all levels
 
-    file_handler_warning = logging.FileHandler(f'./logs/info_log_{filename_time}.log')
-    file_handler_warning.setLevel(logging.INFO)  # Set the file handler level to capture all levels
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%m/%d/%Y %I:%M:%S')
-    file_handler.setFormatter(formatter)
-    file_handler_warning.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
-    logging.root.addHandler(file_handler)
-    logging.root.addHandler(file_handler_warning)
-    logging.root.addHandler(console_handler)
-    logging.root.setLevel(logging.DEBUG)
 
 if __name__=="__main__":
     configure_logger()
-    settings = {
-        "teraflash":    {
-            "toptica_IP": "192.168.1.10",
-            "TFC_BEGIN": 1070,
-            "TFC_AVERAGING": 10,
-            "TRANSFER": "block",
-            "TFC_RANGE": 100.,
-            "RESOLUTION": 0.001,
-        },
-        "stagemover":    {
-            "port": "COM4",
-            "device_names": ["x", "y", "z"],
-            "max_lenghts": [48, 140, 48],
-            "permutation": [2, 0, 1],
-        },
-        "stagegridmover": {
-            "x_min": None,
-            "x_max": None,
-            "x_n": 15,
-            "y_min": None,
-            "y_max": None,
-            "y_max": None,
-            "y_n": 15,
-            "z_min": 25,
-            "z_max": 25,
-            "z_n": 1,
-            },
-        "calibration": {
-            "rough_step_size": 1, #mm
-            "margin": 0.6, 
-            "max_deviation_from_center": 15 #mm
-        },
-        "general": {
-            "measurement_savefolder": f"./measurements/{datetime.now().strftime('%Y-%m-%d')}",
-            "measurement_name": f"{datetime.now().strftime('%H-%M-%S')}_info.txt",
-            "measurement_name_screen": f"{datetime.now().strftime('%H-%M-%S')}_info_screening.txt",
-        }
-    }
+    settings = get_settings()
     a = TFCCoffeeBean(settings)
-    a.connect()
+    a.connect_teraflash()
+    a.connect_stagemover()
     a.calibrate()
     a.run_gridmover()

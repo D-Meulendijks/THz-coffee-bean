@@ -27,7 +27,7 @@ class StageMover:
         self.device_list: list = []
         self.connection = None
 
-    def connect(self, fake: bool = True):
+    def connect(self, fake: bool = False):
         """
         Connect with the three stages.
         """
@@ -86,10 +86,26 @@ class StageMover:
         Move stage on axis "device_name" to "pos". Returns ended up position
         """
         device_index = self.device_names.index(device_name)
-        if pos > self.max_lengths[device_index]:
+
+        if mode == "absolute":
+            pos_target = pos
+        elif mode == "relative":
+            pos_target = self.get_pos()[device_index] + pos
+
+        if pos_target > self.max_lengths[device_index]:
+            # If the target position exceeds the maximum length, instead move to maximum length
             pos = self.max_lengths[device_index]
+            mode = "absolute"
             logging.warning(
                 f"Position {pos} exceeds maximum length of axis {device_name}. Clipping position to maximum value")
+
+        if pos_target < 0:
+            # If the target position exceeds the minimum length, instead move to minimum length
+            pos = 0
+            mode = "absolute"
+            logging.warning(
+                f"Position {pos} exceeds minimum length of axis {device_name}. Clipping position to minimum value")
+
         device = self.device_list[device_index]
         try:
             if mode == "absolute":
@@ -99,7 +115,7 @@ class StageMover:
             else:
                 logging.warning(f"Moving {device_name} with mode '{mode}' not found.")
         except BinaryCommandFailedException as e:
-            logging.warning(f"Movement exceeded maximum length of axis {device_name}. Please adjust the limits.")
+            logging.warning(f"Movement exceeded maximum length of axis {device_name}. Please adjust the limits. {pos}, {mode}")
             logging.warning(f"Resulted in error: {e}")
             end_pos = self.get_pos()[device_index]
         return end_pos
@@ -108,7 +124,7 @@ class StageMover:
     def move_all(self, pos_list: list, mode: str = "absolute") -> list:
         end_pos = []
         for device_name, pos in zip(self.device_names, pos_list):
-            end_pos.append(self.move(pos, device_name, ))
+            end_pos.append(self.move(pos, device_name, mode))
         return end_pos
 
 
