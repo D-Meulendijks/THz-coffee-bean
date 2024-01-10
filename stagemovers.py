@@ -207,7 +207,7 @@ class StageCalibrator:
         self.stagemover = stagemover
 
     def rough_calibration(self):
-        self.start_positions = [25, 50, 25]#self.stagemover.get_pos()
+        self.start_positions = self.stagemover.get_pos()
         self.stagemover.home()
 
         self.middle_positions = self.start_positions
@@ -244,7 +244,7 @@ class StageCalibrator:
                 break
             print(f"{device_name}: {pos} mm")
             pos = self.stagemover.move(calibration_step_size, device_name, "relative")
-            pulse = self.measure_function(self.stagemover.get_pos())
+            pulse = self.measure_function()
             energies.append(pulse.energy())
             offsets.append(pos)
 
@@ -261,7 +261,7 @@ class StageCalibrator:
         else:
             last_offset = offsets[0]
 
-        return last_offset, energies_passed, energies_passed
+        return last_offset, energies_passed, offsets_passed
 
 
 def create_folder_if_not_exists(folder_path):

@@ -4,16 +4,16 @@ def get_settings():
     settings = {
         "teraflash": {
             "toptica_IP": "169.254.132.84",
-            "TFC_BEGIN": 1070,
-            "TFC_AVERAGING": 10,
+            "TFC_BEGIN": 2280,
+            "TFC_AVERAGING": 1,
             "TRANSFER": "block",
-            "TFC_RANGE": 100.,
+            "TFC_RANGE": 200.,
             "RESOLUTION": 0.001,
         },
         "stagemover": {
             "port": "COM4",
             "device_names": ["x", "y", "z"],
-            "max_lenghts": [48, 150, 48],
+            "max_lenghts": [148, 48, 48],
             "permutation": [1, 0, 2],
         },
         "stagegridmover": {

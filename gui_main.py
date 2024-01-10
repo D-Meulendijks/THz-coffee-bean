@@ -12,6 +12,8 @@ from Devices.TeraFlashClient.Pulse import TFPulse
 from guiqwt.curve import CurvePlot
 from guiqwt.builder import make
 from qwt import QwtPlot
+import threading
+import time
 
 # Worker class handling device operations in a separate thread
 class TFCCofffeebeanWorker(QObject):
@@ -36,16 +38,28 @@ class TFCCofffeebeanWorker(QObject):
         except Exception as e:
             logging.warning(f"Error moving stage: {e}")
 
+    def start_continous_measurement_collector_thread(self):
+        measure_thread = threading.Thread(target=self.continous_measurement_collector)
+        measure_thread.daemon = True
+        measure_thread.start()
+
+    @pyqtSlot()
+    def continous_measurement_collector(self):
+        self.stopped = False
+        while not self.stopped:
+            try:
+                self.current_pulse = self.tfccoffeebean.teraflash.get_corrected_pulse()
+                self.trace.emit(self.current_pulse)
+            except Exception as e:
+                logging.warning(f"Error making THz measurement: {e}")
+            time.sleep(0.05)
+
     @pyqtSlot()
     def measure_trace(self):
         try:
-            pulse = self.tfccoffeebean.save_pulse(return_pulse=True)
+            self.tfccoffeebean.save_pulse(self.current_pulse)
         except Exception as e:
-            logging.warning(f"Error making THz measurement: e")
-        try:
-            self.trace.emit(pulse)
-        except Exception as e:
-            logging.warning(f"Error making THz measurement: {e}")
+            logging.warning(f"Error saving THz measurement: {e}")
 
     @pyqtSlot()
     def home(self):
@@ -193,28 +207,50 @@ class MainWindow(QWidget):
 
 
     def set_step_size(self, size):
-        self.step_size = float(size)
-        logging.info(f"Step size set to: {size}")
+        try:
+            float_size = float(size)
+            self.step_size = float_size
+            logging.info(f"Step size set to: {size}")
+        except Exception as e:
+            logging.warning(f"Step size ({size}) not convertable to float, leaving it as {self.step_size}.")
 
     def update_plot(self, updated_trace):
         self.curve_time.set_data(updated_trace.t(), updated_trace.E())
-        self.plot.do_autoscale(replot=True)
+        self.plot_time.replot()
+        self.curve_freq.set_data(updated_trace.f(), updated_trace.S())
+        self.plot_freq.replot()
+
+    def autoscale(self):
+        self.plot_time.do_autoscale(replot=False)
+        self.plot_freq.do_autoscale(replot=False)
 
     def create_manual_measurer(self):
         measure_button = QPushButton("Save Trace")
         measure_button.clicked.connect(self.TFCCofffeebeanWorker.measure_trace)
+        autoscale_button = QPushButton("Adjust scale")
+        autoscale_button.clicked.connect(self.autoscale)
 
         self.TFCCofffeebeanWorker.trace.connect(lambda trace: self.update_plot(trace))
 
-        self.plot = CurvePlot()
+        self.plot_time = CurvePlot()
         self.curve_time = make.curve([], [], color='b', title='pulse')
-        self.plot.add_item(self.curve_time)
-        self.plot.setAxisTitle(QwtPlot.yLeft, 'Electric field (a.u.)')
-        self.plot.setAxisTitle(QwtPlot.xBottom, 'time (ps)')
+        self.plot_time.add_item(self.curve_time)
+        self.plot_time.setAxisTitle(QwtPlot.yLeft, 'Electric field (a.u.)')
+        self.plot_time.setAxisTitle(QwtPlot.xBottom, 'time (ps)')
+
+        self.plot_freq = CurvePlot()
+        self.curve_freq = make.curve([], [], color='b', title='spectrum')
+        self.plot_freq.add_item(self.curve_freq)
+        self.plot_freq.setAxisTitle(QwtPlot.yLeft, 'Power spectrum (a.u.)')
+        self.plot_freq.setAxisTitle(QwtPlot.xBottom, 'frequency (THz)')
 
         layout = QGridLayout()
-        layout.addWidget(measure_button, 0, 0)
-        layout.addWidget(self.plot, 1, 0)
+        buttons = QGridLayout()
+        buttons.addWidget(measure_button, 0, 0)
+        buttons.addWidget(autoscale_button, 0, 1)
+        layout.addLayout(buttons, 0, 0)
+        layout.addWidget(self.plot_time, 1, 0)
+        layout.addWidget(self.plot_freq, 2, 0)
         widget = QGroupBox(f"Manual mover")
         widget.setLayout(layout)
         return widget
@@ -237,10 +273,10 @@ class MainWindow(QWidget):
         xpos_button_2 = QPushButton("X++")
 
         zneg_button = QPushButton("Z-")
-        zneg_button.clicked.connect(partial(self.TFCCofffeebeanWorker.move_stagemovers_relative, [0, 0, -1]))
+        zneg_button.clicked.connect(partial(self.move_stages, [0, 0, -1]))
         zneg_button_2 = QPushButton("Z--")
         zpos_button = QPushButton("Z+")
-        zpos_button.clicked.connect(partial(self.TFCCofffeebeanWorker.move_stagemovers_relative, [0, 0, 1]))
+        zpos_button.clicked.connect(partial(self.move_stages, [0, 0, 1]))
         zpos_button_2 = QPushButton("Z++")
 
         self.pos_label = QLabel("x: 0.0, y: 0.0, z: 0.0")
@@ -280,6 +316,7 @@ class MainWindow(QWidget):
         logging.info(f"Connecting to teraflash at {settings['teraflash']['toptica_IP']}...")
         self.TFCCofffeebeanWorker.connected_teraflash.connect(lambda status: self.update_teraflash_status(status))
         self.TFCCofffeebeanWorker.connect_teraflash()
+        self.TFCCofffeebeanWorker.start_continous_measurement_collector_thread()
 
     def update_teraflash_status(self, status):
         self.connected_teraflash = status
