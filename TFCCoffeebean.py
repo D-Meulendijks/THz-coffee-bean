@@ -14,6 +14,7 @@ sys.path.append("C:\\terasoft\\")
 from Devices.Data.ReadWriteData import Data
 from Devices.TeraFlashClient import TeraFlashClient, State
 import threading
+from Devices.TeraFlashClient.Pulse import TFPulse
 
 PLOT_MAXIMUM_ENERGY = 100
 PLOT_MINIMUM_ENERGY = 0
@@ -42,7 +43,7 @@ class TFC(TeraFlashClient):
         logging.info("Connected and started the laser")
 
     def get_corrected_pulse(self):
-        pulse = self.get_trace()
+        pulse = self.get_next_trace()
         offset = pulse.E()[0:10].mean()
         pulse.subtract_offset(offset)
         return pulse
@@ -117,22 +118,20 @@ class TFCCoffeeBean:
         self.pulse_db = []
         self.temp_pulse_db = []
         self.plot_batch_counter = 0
-        self.current_trace = []
+        self.current_trace = None
 
-    def save_pulse(self, return_pulse=False):
+    def save_pulse(self, pulse):
         file_name = "C:\\Users\\20192137\\Documents\\THz-coffee-bean\\measurements\\pulses"
-        dat = Data(pulse=self.current_trace)
+        dat = Data(pulse=pulse)
         dat.save(file_name)
         logging.info(f'pulse saved to: {dat.filename}')
-        if return_pulse:
-            return self.current_trace
 
 
     def measurement_thread(self):
         self.stopped = False
         while not self.stopped:
             if self.teraflash.running():
-                self.current_trace = self.teraflash.get_next_trace()
+                self.current_trace = self.teraflash.get_corrected_pulse()
 
 
     def connect_teraflash(self):
@@ -196,28 +195,29 @@ class TFCCoffeeBean:
         plt.show()
 
     def measure_and_log(self, position):
-        measurement = self.teraflash.get_corrected_pulse(self.stagemover.get_pos()).signal()
-        current_time = datetime.now()
-        self.plotter.update_plot([measurement, position])
+        pulse = self.teraflash.get_corrected_pulse()
+        self.save_pulse(pulse)
+        self.plotter.update_plot([pulse.trace, position])
+        # current_time = datetime.now()
 
-        pulse_name = f"{current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')}.npy"
-        pulse_path = os.path.join(self.measurement_savefolder_pulses, pulse_name)
-        np.save(pulse_path, measurement)
-        with open(self.measurement_savepath, 'a') as file:
-            file.write(f"{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}_{pulse_path}_{position[0]},{position[1]},{position[2]}\n")
-        return measurement
+        # pulse_name = f"{current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')}.npy"
+        # pulse_path = os.path.join(self.measurement_savefolder_pulses, pulse_name)
+        # np.save(pulse_path, measurement)
+        # with open(self.measurement_savepath, 'a') as file:
+        #     file.write(f"{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}_{pulse_path}_{position[0]},{position[1]},{position[2]}\n")
+        return pulse
 
     def measure_and_log_screen(self, position):
-        measurement = self.teraflash.get_corrected_pulse(self.stagemover.get_pos()).signal()
-        current_time = datetime.now()
-        self.plotter.update_plot([measurement, position])
-
-        pulse_name = f"{current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')}.npy"
-        pulse_path = os.path.join(self.measurement_savefolder_pulses, pulse_name)
-        np.save(pulse_path, measurement)
-        with open(self.measurement_savepath_screen, 'a') as file:
-            file.write(f"{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}_{pulse_path}_{position[0]},{position[1]},{position[2]}\n")
-        return measurement
+        pulse = self.teraflash.get_corrected_pulse()
+        self.save_pulse(pulse)
+        self.plotter.update_plot([pulse.trace, position])
+        # current_time = datetime.now()
+        # pulse_name = f"{current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')}.npy"
+        # pulse_path = os.path.join(self.measurement_savefolder_pulses, pulse_name)
+        # np.save(pulse_path, measurement)
+        # with open(self.measurement_savepath_screen, 'a') as file:
+        #     file.write(f"{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}_{pulse_path}_{position[0]},{position[1]},{position[2]}\n")
+        return pulse
 
 
 
