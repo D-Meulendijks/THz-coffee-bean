@@ -16,7 +16,7 @@ from Devices.TeraFlashClient import TeraFlashClient, State
 import threading
 from Devices.TeraFlashClient.Pulse import TFPulse
 
-PLOT_MAXIMUM_ENERGY = 100
+PLOT_MAXIMUM_ENERGY = 6000
 PLOT_MINIMUM_ENERGY = 0
 
 
@@ -76,7 +76,7 @@ class MeasurementPlotter:
 
     def update_plot(self, new_values):
         self.batch_iteratator += 1
-        self.values.append([np.max(new_values[0]), new_values[1]])
+        self.values.append([new_values[0], new_values[1]])
         if self.batch_iteratator % self.batch_number != 0:
             return
         
@@ -183,8 +183,8 @@ class TFCCoffeeBean:
         self.teraflash.set_averaging(self.settings["teraflash"]['TFC_AVERAGING'])
 
     def run_gridmover(self):
-        self.settings["stagegridmover"]["x_n"] = 100
-        self.settings["stagegridmover"]["y_n"] = 100
+        self.settings["stagegridmover"]["x_n"] = 25
+        self.settings["stagegridmover"]["y_n"] = 25
         self.plotter = MeasurementPlotter(self.settings)
         self.plotter.create_plot()
         logging.info(f"Starting gridmove")
@@ -197,7 +197,7 @@ class TFCCoffeeBean:
     def measure_and_log(self, position):
         pulse = self.teraflash.get_corrected_pulse()
         self.save_pulse(pulse)
-        self.plotter.update_plot([pulse.trace, position])
+        self.plotter.update_plot([pulse.energy(), position])
         # current_time = datetime.now()
 
         # pulse_name = f"{current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')}.npy"
@@ -210,7 +210,7 @@ class TFCCoffeeBean:
     def measure_and_log_screen(self, position):
         pulse = self.teraflash.get_corrected_pulse()
         self.save_pulse(pulse)
-        self.plotter.update_plot([pulse.trace, position])
+        self.plotter.update_plot([pulse.energy(), position])
         # current_time = datetime.now()
         # pulse_name = f"{current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')}.npy"
         # pulse_path = os.path.join(self.measurement_savefolder_pulses, pulse_name)
