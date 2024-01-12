@@ -1,5 +1,5 @@
 import sys
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QPalette, QColor
 from PyQt5.QtCore import QThread, pyqtSignal, QObject, pyqtSlot
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGroupBox, QLabel, QGridLayout, QVBoxLayout, QHBoxLayout, QLineEdit, QDialog, QSpinBox, QDoubleSpinBox
 from datetime import datetime
@@ -10,6 +10,7 @@ from settings import get_settings
 from logger_settings import configure_logger, create_folder_if_not_exists
 from TFCCoffeebean import TFCCoffeeBean
 from Devices.TeraFlashClient.Pulse import TFPulse
+from Devices.TeraFlashClient import State
 from guiqwt.curve import CurvePlot
 from guiqwt.builder import make
 from qwt import QwtPlot
@@ -241,10 +242,65 @@ class MainWindow(QWidget):
         try:
             int_newvalue = int(newvalue)
             self.TFCCofffeebeanWorker.tfccoffeebean.teraflash.set_averaging(int_newvalue)
-        except:
-            logging.warning(f"Error updating averaging value, {newvalue} is not an integer")
+        except Exception as e:
+            logging.warning(f"Error updating averaging value, cannot convert {newvalue} to an integer: {e}")
+
+    def update_begin(self, newvalue):
+        try:
+            float_newvalue = int(newvalue)
+            self.TFCCofffeebeanWorker.tfccoffeebean.teraflash.set_begin(float_newvalue)
+        except Exception as e:
+            logging.warning(f"Error updating averaging value, cannot convert {newvalue} to a float: {e}")
+
+    def update_range(self, newvalue):
+        def update_range_thread():
+            self.TFCCofffeebeanWorker.tfccoffeebean.teraflash.set_range(float_newvalue)
+        try:
+            float_newvalue = int(newvalue)
+            measure_thread = threading.Thread(target=update_range_thread)
+            measure_thread.daemon = True
+            measure_thread.start()
+
+        except Exception as e:
+            logging.warning(f"Error updating averaging value, cannot convert {newvalue} to a float: {e}")
+
+    def get_palette(self):
+        on = QPalette()
+        on.setColor(QPalette.WindowText, QColor(0, 225, 43))
+        off = QPalette()
+        off.setColor(QPalette.WindowText, QColor(255, 0, 0))
+        wait = QPalette()
+        wait.setColor(QPalette.WindowText, QColor(254, 210, 61))
+        return on, off, wait
+
+    @pyqtSlot(int)
+    def laser_state_changed(self, x):
+        state = State(x)
+        on, off, wait = self.get_palette()
+        if state == State.ON:
+            self.laser_state.setPalette(on)
+        elif state == State.OFF:
+            self.laser_state.setPalette(off)
+        else:
+            self.laser_state.setPalette(wait)
+
+    @pyqtSlot(int)
+    def acq_state_changed(self, x):
+        state = State(x)
+        on, off, wait = self.get_palette()
+        if state == State.ON:
+            self.acq_state.setPalette(on)
+        elif state == State.OFF:
+            self.acq_state.setPalette(off)
+        else:
+            self.acq_state.setPalette(wait)
 
     def create_manual_measurer(self):
+        self.laser_state = QLabel("█ LASER █")
+        self.acq_state = QLabel("█ SHAKER █")
+        self.TFCCofffeebeanWorker.tfccoffeebean.teraflash.signal_acq_state.connect(self.acq_state_changed)
+        self.TFCCofffeebeanWorker.tfccoffeebean.teraflash.signal_laser_state.connect(self.laser_state_changed)
+
         measure_button = QPushButton("Save Trace")
         measure_button.clicked.connect(self.TFCCofffeebeanWorker.measure_trace)
         autoscale_button = QPushButton("Adjust scale")
@@ -252,7 +308,7 @@ class MainWindow(QWidget):
         averaging_entry = QSpinBox()
         averaging_entry.setValue(self.TFCCofffeebeanWorker.tfccoffeebean.teraflash.averaging)
         averaging_entry.setMinimum(1)
-        averaging_entry.textChanged.connect(self.update_averaging)
+        averaging_entry.valueChanged.connect(self.update_averaging)
 
         spinBoxBegin = QDoubleSpinBox()
         spinBoxBegin.setAccelerated(False)
@@ -260,6 +316,7 @@ class MainWindow(QWidget):
         spinBoxBegin.setSingleStep(50)
         spinBoxBegin.setValue(self.TFCCofffeebeanWorker.tfccoffeebean.teraflash.begin)
         spinBoxBegin.setObjectName("spinBoxBegin")
+        spinBoxBegin.valueChanged.connect(self.update_begin)
 
         spinBoxRange = QDoubleSpinBox()
         spinBoxRange.setMinimum(20)
@@ -267,6 +324,7 @@ class MainWindow(QWidget):
         spinBoxRange.setSingleStep(10)
         spinBoxRange.setValue(self.TFCCofffeebeanWorker.tfccoffeebean.teraflash.range)
         spinBoxRange.setObjectName("spinBoxRange")
+        spinBoxRange.valueChanged.connect(self.update_range)
 
 
         self.TFCCofffeebeanWorker.trace.connect(lambda trace: self.update_plot(trace))
@@ -288,19 +346,31 @@ class MainWindow(QWidget):
         self.plot_freq.setAxisTitle(QwtPlot.yLeft, 'Power spectrum (a.u.)')
         self.plot_freq.setAxisTitle(QwtPlot.xBottom, 'frequency (THz)')
 
-        layout = QGridLayout()
-        buttons = QGridLayout()
-        buttons.addWidget(measure_button, 0, 0)
-        buttons.addWidget(autoscale_button, 0, 1)
-        buttons.addWidget(QLabel("Averaging:"), 0, 2)
-        buttons.addWidget(averaging_entry, 0, 3)
-        buttons.addWidget(QLabel("Begin:"), 1, 0)
-        buttons.addWidget(spinBoxBegin, 1, 1)
-        buttons.addWidget(QLabel("Range:"), 1, 2)
-        buttons.addWidget(spinBoxRange, 1, 3)
-        layout.addLayout(buttons, 0, 0)
-        layout.addWidget(self.plot_time, 1, 0)
-        layout.addWidget(self.plot_freq, 2, 0)
+        layout = QVBoxLayout()
+
+        teraflash_status = QHBoxLayout()
+        teraflash_status.addWidget(self.laser_state)
+        teraflash_status.addWidget(self.acq_state)
+
+        buttons_1 = QHBoxLayout()
+        buttons_1.addWidget(measure_button, 0)
+        buttons_1.addWidget(autoscale_button, 1)
+        buttons_1.addWidget(QLabel("Averaging:"), 2)
+        buttons_1.addWidget(averaging_entry, 3)
+        buttons_2 = QHBoxLayout()
+        buttons_2.addWidget(QLabel("Begin:"), 0)
+        buttons_2.addWidget(spinBoxBegin, 1)
+        buttons_2.addWidget(QLabel("Range:"), 2)
+        buttons_2.addWidget(spinBoxRange, 3)
+
+        teraflash_info = QVBoxLayout()
+        teraflash_info.addLayout(teraflash_status)
+        teraflash_info.addLayout(buttons_1)
+        teraflash_info.addLayout(buttons_2)
+
+        layout.addLayout(teraflash_info, 0)
+        layout.addWidget(self.plot_time, 1)
+        layout.addWidget(self.plot_freq, 2)
         widget = QGroupBox(f"Measurement section")
         widget.setLayout(layout)
         return widget
