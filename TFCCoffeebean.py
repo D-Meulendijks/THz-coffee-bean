@@ -51,8 +51,8 @@ class TFC(TeraFlashClient):
         
 class MeasurementPlotter:
     def __init__(self, settings: dict):
-        self.width = settings["stagegridmover"]["x_n"] # width
-        self.height = settings["stagegridmover"]["y_n"] # height
+        self.width = int(settings["stagegridmover"]["x_n"]) # width
+        self.height = int(settings["stagegridmover"]["y_n"]) # height
         self.x_max = settings["stagegridmover"]["x_max"]
         self.x_min= settings["stagegridmover"]["x_min"]
         self.y_max = settings["stagegridmover"]["y_max"]
@@ -91,7 +91,7 @@ class MeasurementPlotter:
             y_pixel = np.argmin(np.abs(y_coords - y_pos))
 
             if 0 <= x_pixel < self.width and 0 <= y_pixel < self.height:
-                self.image_data[y_pixel, x_pixel] = measurement
+                self.image_data[x_pixel, y_pixel] = measurement
 
         self.values = []
 
@@ -120,11 +120,15 @@ class TFCCoffeeBean:
         self.plot_batch_counter = 0
         self.current_trace = None
 
+
+        self.save_pulse_file_name = "C:\\Users\\20192137\\Documents\\THz-coffee-bean\\measurements\\pulses"
+
+
     def save_pulse(self, pulse):
-        file_name = "C:\\Users\\20192137\\Documents\\THz-coffee-bean\\measurements\\pulses"
         dat = Data(pulse=pulse)
-        dat.save(file_name)
+        dat.save(self.save_pulse_file_name)
         logging.info(f'pulse saved to: {dat.filename}')
+        return dat.filename
 
 
     def measurement_thread(self):
@@ -172,8 +176,6 @@ class TFCCoffeeBean:
         return [x_min, x_max, y_min, y_max]
 
     def run_gridmover_screen(self):
-        self.settings["stagegridmover"]["x_n"] = 10
-        self.settings["stagegridmover"]["y_n"] = 10
         self.plotter = MeasurementPlotter(self.settings)
         self.plotter.create_plot()
         self.teraflash.set_averaging(2)
@@ -183,8 +185,6 @@ class TFCCoffeeBean:
         self.teraflash.set_averaging(self.settings["teraflash"]['TFC_AVERAGING'])
 
     def run_gridmover(self):
-        self.settings["stagegridmover"]["x_n"] = 25
-        self.settings["stagegridmover"]["y_n"] = 25
         self.plotter = MeasurementPlotter(self.settings)
         self.plotter.create_plot()
         logging.info(f"Starting gridmove")
@@ -196,15 +196,12 @@ class TFCCoffeeBean:
 
     def measure_and_log(self, position):
         pulse = self.teraflash.get_corrected_pulse()
-        self.save_pulse(pulse)
+        pulse_name = self.save_pulse(pulse)
         self.plotter.update_plot([pulse.energy(), position])
-        # current_time = datetime.now()
+        current_time = datetime.now()
 
-        # pulse_name = f"{current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')}.npy"
-        # pulse_path = os.path.join(self.measurement_savefolder_pulses, pulse_name)
-        # np.save(pulse_path, measurement)
-        # with open(self.measurement_savepath, 'a') as file:
-        #     file.write(f"{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}_{pulse_path}_{position[0]},{position[1]},{position[2]}\n")
+        with open(self.measurement_savepath, 'a') as file:
+            file.write(f"{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}_{pulse_name}_{position[0]},{position[1]},{position[2]}\n")
         return pulse
 
     def measure_and_log_screen(self, position):

@@ -75,6 +75,11 @@ class TFCCofffeebeanWorker(QObject):
     def connect_stagemover(self):
         connection_status = self.tfccoffeebean.connect_stagemover()
         self.connected_stagemover.emit(connection_status)
+        try:
+            position = self.tfccoffeebean.stagemover.get_pos()
+            self.updated_position.emit(position)
+        except Exception as e:
+            logging.warning(f"Error moving stage: {e}")
 
     @pyqtSlot()
     def connect_teraflash(self):
@@ -85,6 +90,15 @@ class TFCCofffeebeanWorker(QObject):
     def send_message(self, position):
         response = self.device.send_message(position)
         self.message_sent.emit(response)
+
+    def run_gridmover(self):
+        logging.info("Starting gridmover")
+        self.tfccoffeebean.run_gridmover()
+
+    def start_gridmover_thread(self):
+        gridmover_thread = threading.Thread(target=self.run_gridmover)
+        gridmover_thread.daemon = True
+        gridmover_thread.start()
 
 # Your settings dictionary
 settings = get_settings()
@@ -104,14 +118,6 @@ class MainWindow(QWidget):
         self.setGeometry(300, 200, 800, 400)
 
 
-        calibration_button = QPushButton("Calibrate", self)
-        calibration_button.clicked.connect(self.calibration_function)
-        calibration_button.setFixedSize(100, 30)
-
-        run_gridmover_button = QPushButton("Run Grid Mover", self)
-        run_gridmover_button.clicked.connect(self.open_gridmover_window)
-        run_gridmover_button.setFixedSize(100, 30)
-
         settings_group_box = self.create_settings_group_box()
         manual_mover_box = self.create_manual_mover()
         manual_measurer_box = self.create_manual_measurer()
@@ -125,8 +131,7 @@ class MainWindow(QWidget):
 
         stagemover_connection_layout = self.create_stagemover_connection_layout()
         button_layout.addLayout(stagemover_connection_layout)
-        button_layout.addWidget(calibration_button)
-        button_layout.addWidget(run_gridmover_button)
+        button_layout.addLayout(self.create_gridmover_layout())
         button_layout.addWidget(manual_mover_box)
         main_layout.addLayout(button_layout, 1)
         for box in settings_group_box:
@@ -138,6 +143,51 @@ class MainWindow(QWidget):
         self.setLayout(main_layout)
         self.show()
 
+    def set_gridmover_settings(self, param, value):
+        try:
+            self.settings['stagegridmover'][param] = float(value)
+            self.TFCCofffeebeanWorker.update_settings(self.settings)
+            logging.debug(self.settings)
+        except Exception as e:
+            logging.warning(f"Cannot set new setting for {param}: {e}")
+
+
+    def create_gridmover_layout(self):
+
+
+        calibration_button = QPushButton("Calibrate", self)
+        calibration_button.clicked.connect(self.calibration_function)
+        calibration_button.setFixedSize(100, 30)
+
+        run_gridmover_button = QPushButton("Run Grid Mover", self)
+        run_gridmover_button.clicked.connect(self.run_gridmover_worker)
+        run_gridmover_button.setFixedSize(100, 30)
+
+
+        gridmover_settings = QGridLayout()
+        def add_button(param, j=0, l=0):
+            entry = QLineEdit(str(self.settings['stagegridmover'][param]))
+            entry.textChanged.connect(lambda x: self.set_gridmover_settings(param, x))
+            label = QLabel(f'{param}: ')
+            gridmover_settings.addWidget(label, j, l)
+            gridmover_settings.addWidget(entry, j, l+1)
+
+        add_button('x_min', j=0, l=0)
+        add_button('x_max', j=0, l=2)
+        add_button('x_n', j=0, l=4)
+        add_button('y_min', j=1, l=0)
+        add_button('y_max', j=1, l=2)
+        add_button('y_n', j=1, l=4)
+        add_button('z_min', j=2, l=0)
+        add_button('z_max', j=2, l=2)
+        add_button('z_n', j=2, l=4)
+
+        layout = QHBoxLayout()
+        layout.addWidget(calibration_button)
+        layout.addWidget(run_gridmover_button)
+        layout.addLayout(gridmover_settings)
+
+        return layout
 
 
     def create_teraflash_connection_layout(self):
@@ -308,6 +358,7 @@ class MainWindow(QWidget):
         averaging_entry = QSpinBox()
         averaging_entry.setValue(self.TFCCofffeebeanWorker.tfccoffeebean.teraflash.averaging)
         averaging_entry.setMinimum(1)
+        averaging_entry.setMaximum(100000)
         averaging_entry.valueChanged.connect(self.update_averaging)
 
         spinBoxBegin = QDoubleSpinBox()
@@ -479,48 +530,8 @@ class MainWindow(QWidget):
         calibration_result = self.TFC.calibrate()
         self.calibration_values.setText(f"Calibration Values: {calibration_result}")
 
-    def open_gridmover_window(self):
-        self.TFC.run_gridmover()
-
-
-
-
-
-class GridMoverWindow(QDialog):
-    def __init__(self, settings):
-        super().__init__()
-        self.settings = settings
-        self.init_ui()
-
-    def init_ui(self):
-        self.setWindowTitle("Grid Mover")
-        self.setGeometry(300, 200, 300, 200)
-        # Add functionality and widgets for grid mover window as needed
-
-
-class SettingsWindow(QDialog):
-    def __init__(self, settings):
-        super().__init__()
-        self.settings = settings
-        self.init_ui()
-
-    def init_ui(self):
-        self.setWindowTitle("Settings")
-        self.setGeometry(300, 200, 400, 300)
-
-        # Create QLineEdit fields for each setting that needs to be editable
-        # Populate QLineEdit fields with existing settings values
-
-        vbox = QVBoxLayout()
-        # Add QLineEdit fields and labels for settings here
-        # Example:
-        # line_edit = QLineEdit(self)
-        # line_edit.setText(str(self.settings['teraflash']['toptica_IP']))
-        # vbox.addWidget(QLabel("Toptica IP"))
-        # vbox.addWidget(line_edit)
-
-        self.setLayout(vbox)
-        self.show()
+    def run_gridmover_worker(self):
+        self.TFCCofffeebeanWorker.run_gridmover()
 
 
 def main():

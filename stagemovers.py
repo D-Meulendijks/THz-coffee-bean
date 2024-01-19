@@ -174,9 +174,9 @@ class StageGridMover:
         self.z_n: float = settings["z_n"]
 
     def run_grid(self, func):
-        x_grid = np.linspace(self.x_min, self.x_max, self.x_n)
-        y_grid = np.linspace(self.y_min, self.y_max, self.y_n)
-        z_grid = np.linspace(self.z_min, self.z_max, self.z_n)
+        x_grid = np.linspace(self.x_min, self.x_max, int(self.x_n))
+        y_grid = np.linspace(self.y_min, self.y_max, int(self.y_n))
+        z_grid = np.linspace(self.z_min, self.z_max, int(self.z_n))
 
         start_time = datetime.now()
         total_iterations = self.x_n * self.y_n * self.z_n
@@ -190,7 +190,7 @@ class StageGridMover:
                     iteration += 1
                     self.stage_mover.move(y, "y")
                     time_passed = datetime.now() - start_time
-                    time_left = time_passed * total_iterations / iteration
+                    time_left = time_passed * total_iterations / iteration - time_passed
                     logging.info(
                         f"Position: ({x:04f}, {y:04f}, {z:04f}), Iteration: {iteration}/{total_iterations}, Time passed: {strfdelta(time_passed, '%H:%M:%S')}, Estimated time left: {strfdelta(time_left, '%H:%M:%S')}")
                     func([x, y, z])
